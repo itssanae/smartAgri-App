@@ -1,374 +1,312 @@
-#///////////////////////////////////////////////
-#//////////////////////////////////////////////////
 # =========================================================
-# SMART AGRICULTURE BACKEND
-# Flask + YOLOv8 + Gemini AI
-# =========================================================
-
-# =========================================================
-# IMPORTS
+# SMART AGRICULTURE - BACKEND API
+# Flask + YOLOv8 + Groq AI Chatbot
 # =========================================================
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-
 from ultralytics import YOLO
 from PIL import Image
-
 from datetime import datetime
-
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-    print("Module google.generativeai non trouvé. Gemini désactivé.")
-
+from groq import Groq
 from dotenv import load_dotenv
-
 import os
 
 # =========================================================
-# LOAD ENV VARIABLES
+# CONFIGURATION
 # =========================================================
 
 load_dotenv()
 
-# =========================================================
-# FLASK CONFIGURATION
-# =========================================================
-
 app = Flask(__name__)
-
 CORS(app)
 
 # =========================================================
-# YOLO MODEL CONFIGURATION
+# CHARGEMENT DU MODÈLE YOLO
 # =========================================================
 
 MODEL_PATH = "models/best.pt"
 
-print("Chargement du modèle YOLO...")
-
-model = YOLO(MODEL_PATH)
-
-print("Modèle YOLO chargé avec succès")
+print("🔄 Chargement du modèle YOLO...")
+try:
+    model = YOLO(MODEL_PATH)
+    print("✅ Modèle YOLO chargé avec succès")
+except Exception as e:
+    print(f"❌ Erreur chargement modèle : {e}")
+    model = None
 
 # =========================================================
-# GEMINI CONFIGURATION
+# CONFIGURATION GROQ (CHATBOT)
 # =========================================================
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+groq_client = None
 
-gemini_model = None
-
-if GEMINI_API_KEY:
-
+if GROQ_API_KEY:
     try:
-
-        genai.configure(api_key=GEMINI_API_KEY)
-
-        gemini_model = genai.GenerativeModel(
-            "gemini-1.5-flash"
-        )
-
-        print("Gemini configuré avec succès")
-
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        print("✅ Groq configuré avec succès")
     except Exception as e:
-
-        print("Erreur Gemini :", e)
-
+        print(f"❌ Erreur configuration Groq : {e}")
 else:
-
-    print("Aucune clé Gemini trouvée")
-
-# =========================================================
-# GROQ CONFIGURATION (COMMENTÉE)
-# =========================================================
-
-# from groq import Groq
-#
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-#
-# groq_client = Groq(api_key=GROQ_API_KEY)
+    print("⚠️  Aucune clé Groq trouvée dans .env")
 
 # =========================================================
-# TEMP DATABASE
+# BASE DE DONNÉES TEMPORAIRE
 # =========================================================
 
 predictions_db = []
 
 # =========================================================
-# CHATBOT SYSTEM PROMPT
+# PROMPT SYSTÈME CHATBOT
 # =========================================================
 
-SYSTEM_PROMPT = """
-Tu es un assistant agricole intelligent spécialisé dans :
+SYSTEM_PROMPT = """Tu es un assistant agricole intelligent spécialisé dans les maladies des plantes.
 
-- les maladies des plantes
-- la santé des cultures
-- les conseils agricoles
-- la prévention des maladies
+**LANGUES :**
+- Tu dois répondre dans la langue utilisée par l'agriculteur.
+- S'il te parle en français, réponds en français.
+- S'il te parle en arabe standard, réponds en arabe.
+- S'il te parle en Darija marocaine (ex: "fih lk7oliya f lwra9", "wash hadi mrada", "kifach n3alj had lmard"), réponds en Darija marocain.
+- Pour la Darija, tu peux utiliser des lettres arabes ou latines selon ce qu'il utilise.
+- Utilise un langage simple, pas de termes trop techniques.
 
-Plantes principales :
-- Tomate
-- Pomme de terre
-- Poivron
+**Plantes supportées :**
+- Tomate (طماطم / maticha)
+- Pomme de terre (بطاطس / batata)
+- Poivron (فلفل / felfla)
 
-Tu dois :
-- répondre en français
-- être simple et clair
-- donner des conseils utiles
-- aider les agriculteurs débutants
+**Maladies courantes :**
+- Mildiou (Early blight, Late blight / مرض اللفحة)
+- Taches bactériennes (Bacterial spot / البقع البكتيرية)
+- Moisissures (Leaf Mold / العفن)
+- Virus (Mosaic virus, YellowLeaf Curl)
+- Acariens (Spider mites / العث)
 
-Ne donne jamais de réponses dangereuses.
-"""
+**Ton rôle :**
+- Donner des conseils pratiques de traitement
+- Expliquer les symptômes simplement
+- Suggérer des préventions accessibles
+- Être encourageant et positif
+
+**Exemples de réponses en Darija :**
+- "had lmard smito mildiou, kayban f lwra9 bli kay9albo s-hmar"
+- "khaskترش lma9 mzyane w ma t5lihoumch fl rtoba bzaf"
+- "ستعمل had ddwa (copper fungicide) wla chi 7aja tabi3iya"
+
+Adapte-toi toujours à la langue de l'utilisateur."""
 
 # =========================================================
-# HEALTH CHECK ROUTE
+# ROUTE : HEALTH CHECK
 # =========================================================
 
 @app.route('/api/health', methods=['GET'])
-def health():
-
+def health_check():
+    """Vérifier que l'API fonctionne"""
+    
     return jsonify({
         "success": True,
-        "message": "Backend actif",
-        "model_loaded": True,
-        "chatbot_loaded": gemini_model is not None
+        "message": "✅ Backend opérationnel",
+        "services": {
+            "model": model is not None,
+            "chatbot": groq_client is not None
+        }
     })
 
 # =========================================================
-# PREDICTION ROUTE
+# ROUTE : PRÉDICTION DE MALADIE
 # =========================================================
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
-
+    """Analyser une image de plante"""
+    
     try:
-
-        # Vérifier image
-        if 'image' not in request.files:
-
+        # Vérifier que le modèle est chargé
+        if model is None:
             return jsonify({
                 "success": False,
-                "error": "Aucune image envoyée"
+                "error": "Modèle non chargé"
+            }), 500
+        
+        # Vérifier qu'une image est envoyée
+        if 'image' not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "Aucune image fournie"
             }), 400
-
+        
         file = request.files['image']
-
-        # Ouvrir image
+        
+        # Ouvrir l'image
         image = Image.open(file.stream)
-
-        # Prediction YOLO
-        results = model.predict(
-            source=image,
-            conf=0.5
-        )
-
+        
+        # Faire la prédiction
+        results = model.predict(source=image, conf=0.5)
         result = results[0]
-
-        # Extraire résultat
+        
+        # Extraire les résultats
         class_id = result.probs.top1
-
         confidence = result.probs.top1conf.item()
-
         disease_name = result.names[class_id]
-
-        # Détection type plante
+        
+        # Déterminer le type de plante
         plant_type = "Inconnue"
-
         if "Tomato" in disease_name:
-
             plant_type = "Tomate"
-
         elif "Potato" in disease_name:
-
             plant_type = "Pomme de terre"
-
         elif "Pepper" in disease_name:
-
             plant_type = "Poivron"
-
-        # Healthy ?
+        
+        # Vérifier si la plante est saine
         is_healthy = "healthy" in disease_name.lower()
-
-        # Objet prediction
+        
+        # Créer l'objet de prédiction
         prediction = {
-
             "id": len(predictions_db) + 1,
-
             "timestamp": datetime.now().isoformat(),
-
             "plant_type": plant_type,
-
             "disease": disease_name,
-
             "confidence": round(confidence * 100, 2),
-
             "is_healthy": is_healthy
         }
-
-        # Sauvegarde mémoire
+        
+        # Sauvegarder dans la base
         predictions_db.append(prediction)
-
-        # Retour résultat
+        
         return jsonify({
             "success": True,
             "prediction": prediction
         })
-
+    
     except Exception as e:
-
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
 
 # =========================================================
-# HISTORY ROUTE
+# ROUTE : HISTORIQUE DES PRÉDICTIONS
 # =========================================================
 
 @app.route('/api/history', methods=['GET'])
-def history():
-
+def get_history():
+    """Récupérer les 50 dernières prédictions"""
+    
     return jsonify({
         "success": True,
         "history": predictions_db[-50:]
     })
 
 # =========================================================
-# DASHBOARD STATS ROUTE
+# ROUTE : STATISTIQUES
 # =========================================================
 
 @app.route('/api/stats', methods=['GET'])
-def stats():
-
+def get_stats():
+    """Calculer les statistiques du dashboard"""
+    
     total = len(predictions_db)
-
-    healthy = sum(
-        1 for p in predictions_db
-        if p['is_healthy']
-    )
-
+    healthy = sum(1 for p in predictions_db if p['is_healthy'])
     diseased = total - healthy
-
-    # Stats plantes
+    
+    # Statistiques par type de plante
     plants = {}
-
     for p in predictions_db:
-
         pt = p['plant_type']
-
         if pt not in plants:
-
-            plants[pt] = {
-                "total": 0,
-                "healthy": 0,
-                "diseased": 0
-            }
-
+            plants[pt] = {"total": 0, "healthy": 0, "diseased": 0}
+        
         plants[pt]["total"] += 1
-
         if p['is_healthy']:
-
             plants[pt]["healthy"] += 1
-
         else:
-
             plants[pt]["diseased"] += 1
-
+    
     return jsonify({
-
         "success": True,
-
         "stats": {
-
-            "total_predictions": total,
-
-            "healthy_predictions": healthy,
-
-            "diseased_predictions": diseased,
-
-            "plants": plants
+            "total": total,
+            "healthy": healthy,
+            "diseased": diseased,
+            "by_plant": plants
         }
     })
 
 # =========================================================
-# CHATBOT ROUTE
+# ROUTE : CHATBOT
 # =========================================================
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-
+    """Discuter avec l'assistant agricole"""
+    
     try:
-
-        # Vérifier Gemini
-        if gemini_model is None:
-
+        # Vérifier que Groq est configuré
+        if groq_client is None:
             return jsonify({
                 "success": False,
-                "error": "Gemini non configuré"
+                "error": "Chatbot non configuré (clé Groq manquante)"
             }), 500
-
-        # Données frontend
+        
+        # Récupérer le message
         data = request.json
-
         user_message = data.get("message", "")
-
-        # Vérifier message
+        history = data.get("history", [])
+        
         if not user_message:
-
             return jsonify({
                 "success": False,
                 "error": "Message vide"
             }), 400
-
-        # Prompt final
-        final_prompt = f"""
-{SYSTEM_PROMPT}
-
-Utilisateur :
-{user_message}
-
-Assistant :
-"""
-
-        # Génération réponse
-        response = gemini_model.generate_content(
-            final_prompt
+        
+        # Construire les messages
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
+        # Ajouter l'historique (max 10 messages)
+        for msg in history[-10:]:
+            messages.append(msg)
+        
+        # Ajouter le nouveau message
+        messages.append({"role": "user", "content": user_message})
+        
+        # Appeler Groq
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
         )
-
-        chatbot_response = response.text
-
-        # Retour frontend
+        
+        response_text = completion.choices[0].message.content
+        
         return jsonify({
-
             "success": True,
-
-            "response": chatbot_response
+            "response": response_text
         })
-
+    
     except Exception as e:
-
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
 
 # =========================================================
-# MAIN
+# DÉMARRAGE DU SERVEUR
 # =========================================================
 
 if __name__ == '__main__':
-
-    print("======================================")
-    print("SMART AGRICULTURE BACKEND")
-    print("Flask + YOLOv8 + Gemini")
-    print("http://localhost:5000")
-    print("======================================")
-
-    app.run(
-        debug=True,
-        host='0.0.0.0',
-        port=5000
-    )
+    print("\n" + "="*50)
+    print("🌱 SMART AGRICULTURE - BACKEND API")
+    print("="*50)
+    print("📍 URL : http://localhost:5000")
+    print("📊 Endpoints disponibles :")
+    print("   - GET  /api/health")
+    print("   - POST /api/predict")
+    print("   - GET  /api/history")
+    print("   - GET  /api/stats")
+    print("   - POST /api/chat")
+    print("="*50 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)

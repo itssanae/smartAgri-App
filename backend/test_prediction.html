@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Prédiction</title>
+    <style>
+        body {
+            font-family: Arial;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px 0;
+            font-size: 16px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #preview {
+            max-width: 100%;
+            margin: 20px 0;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Test Prédiction</h1>
+    <input type="file" id="imageInput" accept="image/*" onchange="showPreview()">
+    <br>
+    <img id="preview" style="display:none;">
+    <br>
+    <button onclick="testPredict()">Analyser</button>
+    <div id="result"></div>
+
+    <script>
+        function showPreview() {
+            const file = document.getElementById('imageInput').files[0];
+            const preview = document.getElementById('preview');
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        async function testPredict() {
+            const fileInput = document.getElementById('imageInput');
+            const resultDiv = document.getElementById('result');
+            
+            if (!fileInput.files[0]) {
+                alert('Choisissez une image d\'abord !');
+                return;
+            }
+            
+            resultDiv.innerHTML = '⏳ Analyse en cours...';
+            
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const p = data.prediction;
+                    resultDiv.innerHTML = `
+                        <h3>✅ Résultat</h3>
+                        <p><strong>Plante:</strong> ${p.plant_type}</p>
+                        <p><strong>État:</strong> ${p.is_healthy ? '✅ Saine' : '⚠️ Malade'}</p>
+                        <p><strong>Maladie:</strong> ${p.disease}</p>
+                        <p><strong>Confiance:</strong> ${p.confidence}%</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = '❌ Erreur: ' + data.error;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = '❌ Erreur: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

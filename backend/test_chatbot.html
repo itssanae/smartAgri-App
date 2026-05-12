@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Chatbot</title>
+    <style>
+        body {
+            font-family: Arial;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #response {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 Test Chatbot</h1>
+    <input type="text" id="message" placeholder="Posez votre question...">
+    <button onclick="testChat()">Envoyer</button>
+    <div id="response"></div>
+
+    <script>
+        async function testChat() {
+            const message = document.getElementById('message').value;
+            const responseDiv = document.getElementById('response');
+            
+            responseDiv.innerHTML = '⏳ Envoi...';
+            
+            try {
+                const response = await fetch('http://localhost:5000/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        history: []
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    responseDiv.innerHTML = '✅ Réponse:\n\n' + data.response;
+                } else {
+                    responseDiv.innerHTML = '❌ Erreur: ' + data.error;
+                }
+            } catch (error) {
+                responseDiv.innerHTML = '❌ Erreur: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
